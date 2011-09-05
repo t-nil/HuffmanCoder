@@ -3,10 +3,8 @@ package de.flomeise.huffmancoder;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.BitSet;
 import java.util.ArrayList;
 import java.util.TreeSet;
 import java.util.logging.Level;
@@ -18,9 +16,8 @@ import javax.swing.JOptionPane;
  * @author Flohw
  */
 public class Huffman {
-    private static final int BUFF_SIZE = 8192;
+    private static final int BUFF_SIZE = 4096;
     private File input, output;
-    private BitCode eofCode;
     
     public void compress(File inputFile, File outputFile) {
         System.out.println("Input: " + inputFile + "; Output: " + outputFile);
@@ -31,11 +28,19 @@ public class Huffman {
         output = outputFile;
         long frequencies[] = getByteFrequencies();
         for(int i=0; i<256; i++) {
-            System.out.println((char) i + ": " + frequencies[i]);
+            System.out.println((char) i + "(" + i + ") = " + frequencies[i]);
         }
         BinaryTree tree = frequenciesToTree(frequencies);
-        tree = optimizeTree(tree);
-        writeCompressedData(tree);
+        byte[] codeOutput = treeToArray(tree);
+		tree = arrayToTree(codeOutput);
+		BitCode[] codes = new BitCode[256];
+		treeToBitCodeArray(tree, codes, new BitCode(1), 0);
+		for(int i = 0; i < codes.length; i++) {
+			if(codes[i] != null)
+				System.out.println((char) i + "(" + i + ") = " + getBitCodeAsString(codes[i]));
+		}
+		writeCompressedData(codes, codeOutput);
+		JOptionPane.showMessageDialog(null, "Successfully compressed");
     }
     
     public void decompress(File inputFile, File outputFile) {
@@ -47,9 +52,9 @@ public class Huffman {
         output = outputFile;
         BinaryTree tree = getBinaryTreeFromCompressedFile();
         BitCode[] codes = new BitCode[256];
-        treeToBitSetArray(tree, codes, new BitSet(), 0);
+        treeToBitCodeArray(tree, codes, new BitCode(), 0);
         for(int i=0; i<256; i++) {
-            System.out.println((char) i + ": " + getBitSetAsString(codes[i]));
+            System.out.println((char) i + ": " + getBitCodeAsString(codes[i]));
         }
     }
 
@@ -61,7 +66,7 @@ public class Huffman {
             int numBytes;
             while((numBytes = istream.read(buffer)) != -1) {
                 for(int i=0; i<numBytes; i++) {
-                    frequencies[btos(buffer[i])]++;
+                    frequencies[ByteConversion.btos(buffer[i])]++;
                 }
             }
         } catch (IOException ex) {
@@ -76,7 +81,7 @@ public class Huffman {
             FileInputStream istream = new FileInputStream(input);
             byte[] treeLengthArr = new byte[2];
             istream.read(treeLengthArr);
-            int treeLength = btos(treeLengthArr[0]) * 256 + btos(treeLengthArr[1]);
+            int treeLength = ByteConversion.btos(treeLengthArr[0]) * 256 + ByteConversion.btos(treeLengthArr[1]);
             System.out.println("treeLength: " + treeLength);
             byte[] tree = new byte[treeLength];
             istream.read(tree);
@@ -87,11 +92,15 @@ public class Huffman {
         return null;
     }
     
+	private BinaryTree optimizeTree(BinaryTree tree) {
+		return arrayToTree(treeToArray(tree));
+	}
+	
     private BinaryTree arrayToTree(byte[] arr) {
-        int i = 0, depth = 1;
+        int i = 1, depth = 1;
         BinaryTree tree = new BinaryTree();
         while(i < arr.length) {
-            int count = btos(arr[i]);
+            int count = ByteConversion.btos(arr[i]);
             i++;
             for(int j=0; j<count; j++) {
                 putIntoTree(tree, arr[i], depth);
@@ -100,10 +109,6 @@ public class Huffman {
             depth++;
         }
         return tree;
-    }
-
-    private int btos(byte b) {
-        return (short)b<0?b+256:b;
     }
 
     private boolean putIntoTree(BinaryTree t, byte b, int depth) {
@@ -134,25 +139,27 @@ public class Huffman {
         }
     }
     
-    private void treeToBitSetArray(BinaryTree t, BitCode[] bArr, BitSet b, int i) {
+    private void treeToBitCodeArray(BinaryTree t, BitCode[] bArr, BitCode b, int i) {
         if(t.hasByte()) {
-            bArr[btos(t.getByte())] = new BitCode(b.get(0, i), i);
+			BitCode temp = new BitCode(i);
+			temp.or(b);
+            bArr[ByteConversion.btos(t.getByte())] = temp;
             return;
         } else {
             b.set(i, false);
-            treeToBitSetArray(t.getLeft(), bArr, b, i+1);
+            treeToBitCodeArray(t.getLeft(), bArr, b, i+1);
             b.set(i, true);
-            treeToBitSetArray(t.getRight(), bArr, b, i+1);
+            treeToBitCodeArray(t.getRight(), bArr, b, i+1);
         }
     }
 
-    private String getBitSetAsString(BitCode b) {
+    private String getBitCodeAsString(BitCode b) {
         if(b == null) {
             return null;
         }
         String s = new String();
-        for(int i=0; i<b.getLength(); i++) {
-            s += b.getSet().get(i)?1:0;
+        for(int i=0; i<b.size(); i++) {
+            s += b.get(i)?1:0;
         }
         return s;
     }
@@ -162,7 +169,7 @@ public class Huffman {
         for(int i=0; i<frequencies.length; i++) {
             if(frequencies[i] != 0) {
                 BinaryTree b = new BinaryTree();
-                b.setByte(stob((short)i));
+                b.setByte(ByteConversion.stob((short)i));
                 b.setFrequency(frequencies[i]);
                 v.add(b);
             }
@@ -178,34 +185,35 @@ public class Huffman {
         return (BinaryTree) v.first();
     }
 
-    private byte stob(short i) {
-        if(i <= 255) {
-            return (byte) (i>127?i-256:i);
-        }
-        throw new UnsupportedOperationException("Parameter bigger than byte size");
-    }
-
-    private BinaryTree optimizeTree(BinaryTree tree) {
-        return arrayToTree(treeToArray(tree));
-    }
-
     private byte[] treeToArray(BinaryTree tree) {
         ArrayList[] temp = new ArrayList[tree.getDepth()];
+		for(int i = 0; i < temp.length; i++)
+			temp[i] = new ArrayList();
         countBytesInLayers(tree, temp, -1);
-        int treeLength = temp.length;
-        for(ArrayList a : temp) {
-            treeLength += a.size();
-        }
-        byte[] arr = new byte[treeLength];
+        ArrayList arr = new ArrayList();
         
         for(ArrayList a : temp) {
-            
+            arr.add(ByteConversion.stob((short) a.size()));
+			for(Object o : a) {
+				arr.add((byte) o);
+			}
         }
-        return null;
+		arr.add(0, (byte) tree.getDepth());
+		
+		byte[] bArr = new byte[arr.size()];
+		int i = 0;
+		for(Object o : arr) {
+			bArr[i] = (byte) o;
+			i++;
+		}
+		
+        return bArr;
     }
 
     private void countBytesInLayers(BinaryTree tree, ArrayList[] temp, int i) {
         if(tree.hasByte()) {
+			if(temp[i] == null)
+				temp[i] = new ArrayList();
             temp[i].add(tree.getByte());
             return;
         }
@@ -213,26 +221,22 @@ public class Huffman {
         countBytesInLayers(tree.getRight(), temp, i+1);
     }
 
-    private void writeCompressedData(BinaryTree tree) {
-        BitCode[] codes = new BitCode[256];
-        treeToBitSetArray(tree, codes, new BitSet(), 0);
-        byte[] treeInBytes = treeToArray(tree);
-        
-        try {
-            FileInputStream istream = new FileInputStream(input);
-            FileOutputStream ostream = new FileOutputStream(output);
-            BitCode tempCode = new BitCode();
-            byte[] bufferIn = new byte[BUFF_SIZE];
-            byte[] bufferOut = new byte[BUFF_SIZE];
-            int numBytes, j;
-            /*while((numBytes = istream.read(bufferIn)) != -1) {
-                for(int i=0; i<numBytes; i++) {
-                    
-                }
-            }*/
-            
-        } catch (IOException ex) {
-            Logger.getLogger(Huffman.class.getName()).log(Level.SEVERE, null, ex);
-        }
+    private void writeCompressedData(BitCode[] codes, byte[] codeOutput) {
+		try(FileInputStream fis = new FileInputStream(input); BitOutputStream bos = new BitOutputStream(new FileOutputStream(output))) {
+			bos.write(codeOutput);
+			byte[] buffer = new byte[BUFF_SIZE];
+			int bytesRead = 0;
+			long bytesReadAll = 0, filesize = input.length();
+			while((bytesRead = fis.read(buffer)) != -1) {
+				for(int i = 0; i < bytesRead; i++) {
+					short inputByte = ByteConversion.btos(buffer[i]);
+					bos.writeBitSet(codes[inputByte]);
+				}
+				bytesReadAll += bytesRead;
+			}
+			bos.flush();
+		} catch(IOException ex) {
+			ex.printStackTrace();
+		}
     }
 }
